@@ -38,7 +38,9 @@ function response(): { value: ConnectionIndexResponse; state: ResponseState } {
     value: {
       writeHead(status, headers) {
         state.status = status
-        if (headers !== undefined) state.headers = headers
+        if (headers !== undefined) {
+          state.headers = Object.fromEntries(Object.entries(headers).map(([key, value]) => [key, Array.isArray(value) ? value.join(', ') : value]))
+        }
       },
       end(body) {
         if (body !== undefined) state.body = body

@@ -30,6 +30,8 @@ kind: "package-group"
 | [`credentials-local/`](credentials-local/README.zh.md) | 默认本机存储：一个私有 YAML 文件，优先于环境后备来源 | 注册 `ctx.credentials` |
 | [`authorization/`](authorization/README.zh.md) | 由插件拥有、通过询问人来取得凭据的 flow | `ctx.authorization` |
 
+可选的 [`oidc/`](oidc/README.zh.md) 包提供 `ctx.webAuthentication`，通过显式配置的身份提供方完成浏览器登录，不提供模型凭据。
+
 -----
 
 <a id="related-documentation"></a>

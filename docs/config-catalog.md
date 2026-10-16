@@ -255,7 +255,7 @@ export interface SettingsControllerInternals {
 ## `@deepseek-ai/dsh-api-terminal-controller`
 
 - `inject`: `subprocess` · `sandboxPolicy` · `workingDirectory` · `typert`
-- `source`: [`packages/api/terminal-controller/src/index.ts:27`](../packages/api/terminal-controller/src/index.ts)
+- `source`: [`packages/api/terminal-controller/src/index.ts:28`](../packages/api/terminal-controller/src/index.ts)
 
 ```ts config-catalog
 /** Deployment limits and an optional shell profile. */
@@ -435,11 +435,13 @@ export type Config = LocalConfig
 ## `@deepseek-ai/dsh-client-connection`
 
 - `inject`: `credentials`
-- `source`: [`packages/client/connection/src/index.ts:96`](../packages/client/connection/src/index.ts)
+- `source`: [`packages/client/connection/src/index.ts:98`](../packages/client/connection/src/index.ts)
 
 ```ts config-catalog
 /** Browser authentication, request limits, and connection recovery configuration. */
 export interface ConnectionConfig {
+  /** Native process-token authentication, or an explicitly composed webAuthentication provider. */
+  authentication?: 'native' | 'external'
   /** Browser recovery timing, injected into each served page. */
   recovery?: ConnectionRecoveryConfig
   /**
@@ -793,6 +795,47 @@ export interface Config {
 }
 ```
 <!-- END GENERATED config-catalog:@deepseek-ai/dsh-credentials-local -->
+
+<!-- BEGIN GENERATED config-catalog:@deepseek-ai/dsh-credentials-oidc -->
+<a id="deepseek-aidsh-credentials-oidc"></a>
+
+## `@deepseek-ai/dsh-credentials-oidc`
+
+- `inject`: `webServer`
+- `source`: [`packages/credentials/oidc/src/index.ts:13`](../packages/credentials/oidc/src/index.ts)
+
+```ts config-catalog
+/** Deployment inputs; the client secret comes only from the explicitly named environment variable. */
+export interface Config extends Omit<Options, 'clientSecret'> {
+  /** Name of the environment variable containing this client secret. */
+  clientSecretEnv: string
+  /** Absolute private record pinning this task data to one issuer and subject. */
+  ownerRecordPath: string
+}
+
+/** Explicit protocol limits and deployment identity. */
+export interface Options {
+  /** Exact HTTPS discovery issuer. */
+  issuer: string
+  /** Registered confidential client identifier. */
+  clientId: string
+  /** Secret resolved by the plugin from its named environment variable. */
+  clientSecret: string
+  /** Exact HTTPS callback URLs including the fixed callback path. */
+  callbackUrls: string[]
+  /** Immutable subjects allowed to act as the application owner. */
+  allowedSubjects: string[]
+  /** Absolute application session lifetime in seconds. */
+  sessionTtlSeconds: number
+  /** Single-use login transaction lifetime in seconds. */
+  transactionTtlSeconds: number
+  /** Maximum concurrent application sessions. */
+  maxSessions: number
+  /** Maximum pending browser login transactions. */
+  maxTransactions: number
+}
+```
+<!-- END GENERATED config-catalog:@deepseek-ai/dsh-credentials-oidc -->
 
 <!-- BEGIN GENERATED config-catalog:@deepseek-ai/dsh-deepseek-account-platform -->
 <a id="deepseek-aidsh-deepseek-account-platform"></a>

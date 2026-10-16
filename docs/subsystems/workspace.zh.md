@@ -262,7 +262,8 @@ Typed Remote control of transient Session-owned terminal processes.
  * Allocate a user shell once for a caller-generated identity, without Agent sandbox or approval restrictions.
  * @param agent - Session owner supplied by the Gateway.
  * @param request - initial dimensions and idempotency identity.
- * @param signal - allocation cancellation; committed terminals survive disconnection.
+ * @param signal - allocation cancellation. Committed terminals belong to the Agent;
+ * transport disconnection and authentication revocation do not close them.
  * @returns the existing or newly committed terminal.
  */
 @Remote async create(agent: Agent, request: TerminalCreateRequest, signal: AbortSignal): Promise<WebTerminalInfo>

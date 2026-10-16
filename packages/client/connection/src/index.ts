@@ -15,6 +15,8 @@ import { HostConnectionService } from './rpc-host.ts'
 import { ConnectionRecoveryConfigSchema, resolveConnectionConfig, type ConnectionRecoveryConfig } from './recovery-config.ts'
 
 export type {
+  WebAuthenticationProvider,
+  WebAuthenticationSession,
   PeerAdmission,
   ConnectionAdmission,
   ConnectionFetchMethod,
@@ -94,6 +96,8 @@ export const inject = ['credentials']
 
 /** Browser authentication, request limits, and connection recovery configuration. */
 export interface ConnectionConfig {
+  /** Native process-token authentication, or an explicitly composed webAuthentication provider. */
+  authentication?: 'native' | 'external'
   /** Browser recovery timing, injected into each served page. */
   recovery?: ConnectionRecoveryConfig
   /**
@@ -110,6 +114,7 @@ export interface ConnectionConfig {
 }
 
 export const Config: z<ConnectionConfig> = z.object({
+  authentication: z.union([z.const('native'), z.const('external')]).default('native'),
   recovery: ConnectionRecoveryConfigSchema.default({}),
   trustedHosts: z.array(String).default([]),
   cookieMaxAgeDays: z.natural().min(1).default(30),
@@ -133,15 +138,23 @@ export async function apply(ctx: Context, config?: ConnectionConfig): Promise<vo
   // silently authorizing its hostname prefix at request time.
   for (const entry of trustedHosts) assertTrustedAuthority(entry)
   assertImageBodyCapacity(ctx, maxRequestBodyBytes)
+  const externalAuthentication = config?.authentication === 'external' ? ctx.get('webAuthentication') : undefined
+  if (config?.authentication === 'external' && externalAuthentication === undefined) {
+    throw new Error('client-connection: external authentication requires a composed webAuthentication provider')
+  }
   const connection = new HostConnectionService(
     ctx,
     trustedHosts,
-    await BrowserAuth.create(ctx.root, ctx.credentials, cookieMaxAgeDays),
+    externalAuthentication === undefined ? await BrowserAuth.create(ctx.root, ctx.credentials, cookieMaxAgeDays) : undefined,
+    externalAuthentication,
   )
   ctx.inject(['webServer'], (webCtx) => {
     assertImageBodyCapacity(webCtx, maxRequestBodyBytes)
     webCtx.on('webserver/index-inject', (table) => {
       table.push({ kind: 'global', name: '__DSH_CONNECTION_RECOVERY__', value: recovery })
+      if (externalAuthentication !== undefined) {
+        table.push({ kind: 'global', name: '__DSH_AUTHENTICATION__', value: { loginPath: externalAuthentication.loginPath, sessionPath: '/auth/session' } })
+      }
     })
     const fetchHandler = connection.createSharedFetchHandler(API_PATH)
     const route: WebRoute = {
@@ -154,10 +167,17 @@ export async function apply(ctx: Context, config?: ConnectionConfig): Promise<vo
           res.end(admission.rejection === 401 ? 'unauthorized' : 'forbidden')
           return
         }
-        await webCtx.waterfall('connection/request', req, res, () => bridge(req, res, fetchHandler, admission.peer, maxRequestBodyBytes))
+        await webCtx.waterfall('connection/request', req, res, () => bridge(req, res, fetchHandler, admission.peer, maxRequestBodyBytes, connection.isSessionPeer(admission.peer) ? admission.peer.signal : undefined))
       },
     }
     webCtx.effect(() => webCtx.webServer.register(route), 'client-connection: /api route')
+    if (externalAuthentication !== undefined) {
+      webCtx.effect(() => webCtx.webServer.register({ kind: 'exact', path: '/auth/session', handler(req, res) {
+        const admission = connection.admit(req)
+        res.writeHead('rejection' in admission ? admission.rejection : 204, { 'cache-control': 'no-store' })
+        res.end()
+      } }), 'client-connection: authentication recovery')
+    }
     webCtx.effect(() => webCtx.webServer.register({
       kind: 'exact', path: CONNECT_PATH,
       handler: (req, res) => { connection.authorizeConnect(req, res) },

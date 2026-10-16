@@ -1,5 +1,5 @@
 /** Session identity, allocation races, human execution permissions and real PTY behavior. */
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PassThrough } from 'node:stream'
@@ -12,7 +12,7 @@ import LocalSubprocessRuntime from '@deepseek-ai/dsh-subprocess-local'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { TerminalController, type Config } from '../src/index.ts'
 import { inputChannel } from './input.ts'
-import type { RemoteInvocation, PeerId } from '@deepseek-ai/dsh-typert-protocol'
+import type { RemoteInvocation, PeerId, PeerScope } from '@deepseek-ai/dsh-typert-protocol'
 import { resolveShell } from '../src/shells.ts'
 import type { TerminalInput, WebTerminalId } from '../src/types.ts'
 
@@ -58,7 +58,81 @@ function fixture(overrides: Partial<Config> = {}) {
   return { ctx, agent: owner(ctx), controller, subprocess, handle, sandboxPolicy, workingDirectory, disposeEffect }
 }
 
+function authenticatedTerminalOwner(ctx: Context) {
+  const peerContext = new Context()
+  roots.push(peerContext)
+  const lifetime = new AbortController()
+  const peer: PeerScope = {
+    id: 'session-peer' as PeerId, ctx: peerContext, principal: { kind: 'owner' }, interactions: 'answer',
+    signal: lifetime.signal,
+    dispose: async () => { lifetime.abort(new Error('session revoked')); await peerContext.fiber.dispose() },
+  }
+  ctx.provide('connection', { isSessionPeer: (candidate: PeerScope) => candidate === peer } as never)
+  const invocation: RemoteInvocation = {
+    request: { namespace: 'terminal', method: 'create', args: {} }, service: 'terminalController',
+    signal: signal(), peer, uplink: <In>() => inputChannel<In>().source,
+  }
+  return { peer, controller: ctx.extend({ invocation }).terminalController }
+}
+
 describe('TerminalController', () => {
+  it('retains a committed task terminal after authentication revocation until explicit stop', async () => {
+    const { ctx, agent, controller, handle } = fixture()
+    const authenticated = authenticatedTerminalOwner(ctx)
+    await authenticated.controller.create(agent, request, signal())
+    await authenticated.peer.dispose()
+    expect(handle.terminate).not.toHaveBeenCalled()
+    expect(controller.list(agent.id)).toHaveLength(1)
+    await controller.close(agent, id)
+    expect(handle.terminate).toHaveBeenCalledOnce()
+    expect(controller.list(agent.id)).toEqual([])
+  })
+
+  it('does not adopt an existing native terminal when a session Peer restores its identity', async () => {
+    const { ctx, agent, controller, handle } = fixture()
+    const original = await controller.create(agent, request, signal())
+    const authenticated = authenticatedTerminalOwner(ctx)
+    expect(await authenticated.controller.create(agent, request, signal())).toBe(original)
+    await authenticated.peer.dispose()
+    expect(handle.terminate).not.toHaveBeenCalled()
+    expect(controller.list(agent.id)).toHaveLength(1)
+  })
+
+  it('cancels a pending session allocation and cleans a late provider handle on revocation', async () => {
+    const { ctx, agent, subprocess, handle, controller } = fixture()
+    const authenticated = authenticatedTerminalOwner(ctx)
+    const pendingHandle = Promise.withResolvers<SubprocessTerminalHandle>()
+    subprocess.spawnTerminal.mockImplementationOnce(() => pendingHandle.promise)
+    const creating = authenticated.controller.create(agent, request, signal())
+    const rejected = expect(creating).rejects.toThrow()
+    await expect.poll(() => subprocess.spawnTerminal.mock.calls.length).toBe(1)
+    const disposing = authenticated.peer.dispose()
+    pendingHandle.resolve(handle)
+    await rejected
+    await disposing
+    expect(handle.terminate).toHaveBeenCalledOnce()
+    expect(controller.list(agent.id)).toEqual([])
+  })
+
+  it('rejects allocation for a previously revoked session without spawning', async () => {
+    const { ctx, agent, subprocess } = fixture()
+    const authenticated = authenticatedTerminalOwner(ctx)
+    await authenticated.peer.dispose()
+    await expect(authenticated.controller.create(agent, request, signal())).rejects.toThrow('session revoked')
+    expect(subprocess.spawnTerminal).not.toHaveBeenCalled()
+  })
+
+  it('keeps session-owned terminals after a completed create request is cancelled', async () => {
+    const { ctx, agent, handle } = fixture()
+    const authenticated = authenticatedTerminalOwner(ctx)
+    const requestLifetime = new AbortController()
+    await authenticated.controller.create(agent, request, requestLifetime.signal)
+    requestLifetime.abort()
+    expect(handle.terminate).not.toHaveBeenCalled()
+    await authenticated.peer.dispose()
+    expect(handle.terminate).not.toHaveBeenCalled()
+  })
+
   it('resolves execution services from an Agent plugin context without consumer injections', async () => {
     const { ctx, controller } = fixture()
     let agent: Agent | undefined
@@ -743,3 +817,44 @@ function attachController(
   }
   return agent.ctx.extend({ invocation }).terminalController.attach(agent, terminalId, signal)
 }
+
+
+it.skipIf(process.platform === 'win32')('retains a real task command after logout and recovers its output before explicit close', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'dsh-auth-background-terminal-'))
+  const ctx = new Context()
+  const runtime = await ctx.plugin(LocalSubprocessRuntime)
+  try {
+    ctx.provide('workingDirectory', { get: () => cwd, ensure: async () => cwd } as never)
+    ctx.provide('sandboxPolicy', { defaultMode: 'danger-full-access' } as never)
+    const controller = new TerminalController(ctx, config)
+    const agent = owner(ctx, 'background-task', cwd)
+    const login = authenticatedTerminalOwner(ctx)
+    await login.controller.create(agent, request, signal())
+    const input = inputChannel<TerminalInput>()
+    const watching = new AbortController()
+    const stream = attachController(agent, id, watching.signal, input.source)[Symbol.asyncIterator]()
+    await stream.next()
+    const text: string[] = []
+    const collect = (async () => {
+      for (;;) {
+        const next = await stream.next()
+        if (next.done) return
+        text.push(JSON.stringify(next.value))
+      }
+    })()
+    input.push({ type: 'write', sequence: 1, data: "sleep 0.2; printf 'BACKGROUND_RESULT_123\\n' | tee result.txt\r" })
+    await expect.poll(() => text.join('')).toContain('ack')
+    watching.abort()
+    await collect
+    await login.peer.dispose()
+    expect(controller.list(agent.id)).toHaveLength(1)
+    await expect.poll(async () => readFile(join(cwd, 'result.txt'), 'utf8').catch(() => '')).toBe('BACKGROUND_RESULT_123\n')
+    const recovered = attachController(agent, id, signal())[Symbol.asyncIterator]()
+    let output = ''
+    try {
+      await expect.poll(async () => { const next = await recovered.next(); output += JSON.stringify(next.value); return output }).toContain('BACKGROUND_RESULT_123')
+    } finally { await recovered.return?.() }
+    await controller.close(agent, id)
+    expect(controller.list(agent.id)).toEqual([])
+  } finally { await runtime.dispose(); await ctx.fiber.dispose(); await rm(cwd, { recursive: true, force: true }) }
+})

@@ -2,7 +2,7 @@ import { EventEmitter } from 'node:events'
 import { Readable } from 'node:stream'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { Context } from '@deepseek-ai/cordis'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { bridge } from '../src/http-bridge.ts'
 import { Peer } from '../src/peer.ts'
 
@@ -214,5 +214,107 @@ describe('HTTP bridge abort', () => {
     expect(status).toBe(415)
     expect(headers).toMatchObject({ connection: 'close' })
     expect(destroyed).toEqual([true])
+  })
+})
+
+
+describe('external session HTTP revocation', () => {
+  function transport() {
+    const request = Readable.from([]) as IncomingMessage
+    Object.assign(request, { url: '/api/fixture', method: 'GET', headers: {} })
+    const events = new EventEmitter()
+    const response = Object.assign(events, {
+      destroyed: false, writableEnded: false, headersWritten: 0, bytesWritten: 0,
+      writeHead() { this.headersWritten++; return this },
+      write(chunk: Uint8Array) { this.bytesWritten += chunk.byteLength; return true },
+      end() { this.writableEnded = true; return this },
+      destroy() { this.destroyed = true; events.emit('close'); return this },
+    })
+    return { request, response, peer: new Peer(new Context(), { principal: { kind: 'owner' } }) }
+  }
+
+  it('completes an ordinary external response without destroying buffered output', async () => {
+    const { request, response, peer } = transport()
+    await bridge(request, response, {
+      requestBodyMode: () => 'buffered', fetch: async () => new Response('done'),
+    }, peer, undefined, peer.signal)
+    expect(response.writableEnded).toBe(true)
+    expect(response.destroyed).toBe(false)
+    expect(response.bytesWritten).toBe(4)
+    await peer.dispose()
+  })
+
+  it('bounds teardown of a handler ignoring cancellation and discards its late response', async () => {
+    vi.useFakeTimers()
+    const { request, response, peer } = transport()
+    const started = Promise.withResolvers<undefined>()
+    const late = Promise.withResolvers<Response>()
+    let signal: AbortSignal | undefined
+    const pending = bridge(request, response, {
+      requestBodyMode: () => 'buffered',
+      fetch: async (req) => { signal = req.signal; started.resolve(undefined); return late.promise },
+    }, peer, undefined, peer.signal)
+    try {
+      await started.promise
+      const disposal = peer.dispose()
+      await Promise.resolve()
+      expect(response.destroyed).toBe(true)
+      expect(signal?.aborted).toBe(true)
+      await vi.advanceTimersByTimeAsync(1000)
+      await disposal
+      await pending
+      late.resolve(new Response('late secret response'))
+      await vi.advanceTimersByTimeAsync(0)
+      expect(response.headersWritten).toBe(0)
+      expect(response.bytesWritten).toBe(0)
+      expect(response.writableEnded).toBe(false)
+    } finally { late.resolve(new Response()); vi.useRealTimers(); await peer.dispose() }
+  })
+
+  it('closes a never-ending response reader without waiting for its underlying cancel', async () => {
+    const { request, response, peer } = transport()
+    const reading = Promise.withResolvers<undefined>()
+    let cancelled = false
+    const body = new ReadableStream<Uint8Array>({
+      pull() { reading.resolve(undefined) },
+      cancel() { cancelled = true; return new Promise<void>(() => {}) },
+    })
+    const pending = bridge(request, response, {
+      requestBodyMode: () => 'buffered', fetch: async () => new Response(body),
+    }, peer, undefined, peer.signal)
+    await reading.promise
+    await expect.poll(() => response.headersWritten).toBe(1)
+    await peer.dispose()
+    await pending
+    expect(cancelled).toBe(true)
+    expect(response.destroyed).toBe(true)
+    expect(response.bytesWritten).toBe(0)
+  })
+
+  it('awaits cooperative handler cleanup before completing revocation', async () => {
+    const { request, response, peer } = transport()
+    const started = Promise.withResolvers<undefined>()
+    const cleanup = Promise.withResolvers<undefined>()
+    let cleaned = false
+    const pending = bridge(request, response, {
+      requestBodyMode: () => 'buffered', fetch: async (req) => {
+        started.resolve(undefined)
+        await new Promise<void>(resolve => req.signal.addEventListener('abort', () => resolve(), { once: true }))
+        await cleanup.promise
+        cleaned = true
+        return new Response('done')
+      },
+    }, peer, undefined, peer.signal)
+    await started.promise
+    let disposed = false
+    const disposal = peer.dispose().then(() => { disposed = true })
+    await Promise.resolve()
+    expect(disposed).toBe(false)
+    expect(response.destroyed).toBe(true)
+    cleanup.resolve(undefined)
+    await disposal
+    await pending
+    expect(cleaned).toBe(true)
+    expect(response.headersWritten).toBe(0)
   })
 })

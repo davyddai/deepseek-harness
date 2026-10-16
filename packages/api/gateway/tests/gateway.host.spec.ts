@@ -191,7 +191,7 @@ function browserCookie(connection: HostConnectionHandle, origin: string): string
     url: `${target.pathname}${target.search}`,
     headers: { host: target.host },
   }, {
-    writeHead(_status, headers) { setCookie = headers?.['set-cookie'] },
+    writeHead(_status, headers) { const value = headers?.['set-cookie']; setCookie = Array.isArray(value) ? value[0] : value },
     end() {},
   })
   if (setCookie === undefined) throw new Error('gateway fixture did not receive an authentication cookie')

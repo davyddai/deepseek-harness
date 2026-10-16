@@ -1,0 +1,16 @@
+# Bilingual-pair consistency record for guide.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write docs/upgrade-guide/v0.2.1-alpha.4/oidc-task-ownership/guide.md
+/:
+  en: d01ff5594d0354ac
+  zh: 96e5affd483d3556
+/oidc-task-ownership:
+  en: 0744d77ddb827031
+  zh: 0f21bdf9c9df8d3f
+/oidc-task-ownership/change:
+  en: 984695ac45fd82cb
+  zh: ff3827df3b3712b6
+/oidc-task-ownership/migration:
+  en: 768e0f7ff8c2c8f8
+  zh: 72052cc75f14bdbb

@@ -65,6 +65,13 @@ HTTPS cookie 名称与签名 audience 包含 `https:` scheme，因此即使 host
 
 
 <a id="model-experience"></a>
+## 外部浏览器认证
+
+只有显式注入 `webAuthentication` 并挂载认证提供方（例如 [`credentials-oidc`](../../credentials/oidc/README.zh.md)）的 profile 才能设置 `authentication: external`。缺少提供方会启动失败。此模式拒绝原生启动 token 和 `/connect` 认证；默认模式仍为 native。
+
+提供方统一决定页面、HTTP/API 与 WebSocket 身份。每个外部会话拥有独立 Peer，撤销会关闭其连接、取消在途 HTTP 请求并最多等待一秒完成协作式 HTTP 清理。撤销立即销毁 HTTP 传输；超过等待上限的不合作处理器会解除传输所有权，晚到响应被丢弃，但独立业务执行不能被强制停止。已创建终端保持 Agent 所有权；认证撤销只结束传输访问，不关闭这些终端。已经提交的模型 turn、排队 prompt 和独立后台 job 生命周期不同，不会因浏览器退出自动取消。
+
+外部页面只接收登录与会话端点路径。HTTP 401 或连接会话过期时，页面导航一次到同源登录地址。退出使用同源 `POST /auth/oidc/logout`，目前没有独立的应用退出按钮；DeepSeek 模型账户退出属于另一项操作。
 ## 模型体验
 
 无。协议消费层只在浏览器与主机之间搬运已经组合好的消息；这里没有任何内容进入模型请求。

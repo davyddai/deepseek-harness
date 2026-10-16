@@ -5,6 +5,7 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-sandbox-policy'
 import type {} from '@deepseek-ai/dsh-working-directory'
+import type {} from '@deepseek-ai/dsh-client-connection'
 import { Remote, RemoteError, TypertRemoteService, type RemoteStream } from '@deepseek-ai/dsh-typert-protocol'
 import { discoverShells, resolveShell } from './shells.ts'
 import { BrowserTerminal } from './terminal.ts'
@@ -152,7 +153,8 @@ export class TerminalController extends TypertRemoteService {
    * Allocate a user shell once for a caller-generated identity, without Agent sandbox or approval restrictions.
    * @param agent - Session owner supplied by the Gateway.
    * @param request - initial dimensions and idempotency identity.
-   * @param signal - allocation cancellation; committed terminals survive disconnection.
+   * @param signal - allocation cancellation. Committed terminals belong to the Agent;
+   * transport disconnection and authentication revocation do not close them.
    * @returns the existing or newly committed terminal.
    */
   @Remote
@@ -172,7 +174,13 @@ export class TerminalController extends TypertRemoteService {
       return terminal.info
     }
     if (new Set([...owner.terminals.keys(), ...owner.pending.keys(), ...owner.allocations.keys()]).size >= this.config.maxTerminals) throw new RemoteError('terminal/limit-reached', 'Session terminal limit reached', { limit: this.config.maxTerminals })
-    const allocation = this.spawn(agent, owner, request, AbortSignal.any([signal, this.lifetime.signal, owner.lifetime.signal]))
+    const peer = this.ctx.invocation?.peer
+    const sessionPeer = peer !== undefined && this.ctx.get('connection')?.isSessionPeer?.(peer) === true ? peer : undefined
+    sessionPeer?.signal.throwIfAborted()
+    const allocation = this.spawn(agent, owner, request, AbortSignal.any([
+      signal, this.lifetime.signal, owner.lifetime.signal,
+      ...(sessionPeer === undefined ? [] : [sessionPeer.signal]),
+    ]))
     owner.pending.set(request.id, allocation)
     try {
       const terminal = await allocation

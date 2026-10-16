@@ -759,6 +759,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         parameters: [],
       },
       {
+        signature: 'isSessionPeer?(peer: PeerScope): boolean',
+        description: 'Identify externally authenticated session Peers; absence means host-lifetime legacy Peers.',
+        parameters: [{ name: 'peer', description: 'Peer admitted by this connection owner.' }],
+        returns: 'Whether external session revocation owns this Peer.',
+      },
+      {
         signature: 'readonly allowsRemoteAuthorities: boolean',
         description: 'Whether this deployment accepts authorities beyond loopback: true only when a validated `trustedHosts` entry names a non-loopback hostname.',
         parameters: [],
@@ -3235,7 +3241,7 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
       {
         signature: '@Remote async create(agent: Agent, request: TerminalCreateRequest, signal: AbortSignal): Promise<WebTerminalInfo>',
         description: 'Allocate a user shell once for a caller-generated identity, without Agent sandbox or approval restrictions.',
-        parameters: [{ name: 'agent', description: 'Session owner supplied by the Gateway.' }, { name: 'request', description: 'initial dimensions and idempotency identity.' }, { name: 'signal', description: 'allocation cancellation; committed terminals survive disconnection.' }],
+        parameters: [{ name: 'agent', description: 'Session owner supplied by the Gateway.' }, { name: 'request', description: 'initial dimensions and idempotency identity.' }, { name: 'signal', description: 'allocation cancellation. Committed terminals belong to the Agent; transport disconnection and authentication revocation do not close them.' }],
         returns: 'the existing or newly committed terminal.',
       },
       {
@@ -3653,6 +3659,52 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         description: 'The URL this GUI advertises, also used for `DSH_WEB_URL` and the startup URL line.',
         parameters: [],
         returns: 'the configured `publicUrl`, otherwise the listener origin.',
+      },
+    ],
+  },
+  {
+    key: 'webAuthentication',
+    summary: 'External Web authentication selected explicitly instead of the native token mode.',
+    description: 'External Web authentication selected explicitly instead of the native token mode.',
+    methods: [
+      {
+        signature: 'readonly loginPath: string',
+        description: 'Same-origin login route for browser recovery.',
+        parameters: [],
+      },
+      {
+        signature: 'readonly logoutPath: string',
+        description: 'Same-origin POST logout route.',
+        parameters: [],
+      },
+      {
+        signature: 'authenticate(request: ConnectionTrustRequest): WebAuthenticationSession | undefined',
+        description: 'Return a live validated session.',
+        parameters: [{ name: 'request', description: 'Incoming browser request.' }],
+        returns: 'Validated session, or undefined when unauthorized.',
+      },
+      {
+        signature: 'authorizeIndex(request: ConnectionIndexRequest, response: ConnectionIndexResponse): boolean',
+        description: 'Serve the index only for a validated session, otherwise own the login/rejection response.',
+        parameters: [{ name: 'request', description: 'Incoming page request.' }, { name: 'response', description: 'Response owned on rejection.' }],
+        returns: 'Whether the caller may serve the page.',
+      },
+      {
+        signature: 'authenticatedUrl(baseUrl: string): string',
+        description: 'Return the clean login URL without a native token.',
+        parameters: [{ name: 'baseUrl', description: 'Public deployment URL.' }],
+        returns: 'Clean login URL.',
+      },
+      {
+        signature: 'onRevoke(session: WebAuthenticationSession, cleanup: () => Promise<void>): () => void',
+        description: 'Register cleanup that revocation awaits.',
+        parameters: [{ name: 'session', description: 'Live provider-owned session.' }, { name: 'cleanup', description: 'Asynchronous transport teardown.' }],
+        returns: 'Function that unregisters the cleanup.',
+      },
+      {
+        signature: 'dispose(): Promise<void>',
+        description: 'Revoke all sessions and await cleanup when the owning plugin unloads.',
+        parameters: [],
       },
     ],
   },
@@ -5115,7 +5167,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'ConnectionIndexResponse',
-    declaration: 'export interface ConnectionIndexResponse {\n    writeHead(status: number, headers?: Readonly<Record<string, string>>): unknown;\n    end(body?: string): unknown;\n}',
+    declaration: 'export interface ConnectionIndexResponse {\n    writeHead(status: number, headers?: Readonly<Record<string, string | string[]>>): unknown;\n    end(body?: string): unknown;\n}',
   },
   {
     name: 'ConnectionRequestBodyMode',
@@ -5151,7 +5203,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'ConnectionTrustRequest',
-    declaration: 'export interface ConnectionTrustRequest {\n    readonly headers: Headers | Readonly<Record<string, string | readonly string[] | undefined>>;\n}',
+    declaration: 'export interface ConnectionTrustRequest {\n    readonly url?: string | undefined;\n    readonly headers: Headers | Readonly<Record<string, string | readonly string[] | undefined>>;\n}',
   },
   {
     name: 'ContentBlockMap',
@@ -8552,6 +8604,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'VerifiedWebhookDelivery',
     declaration: 'export interface VerifiedWebhookDelivery<K extends string = string> {\n    readonly kind: K;\n    readonly source: WebhookSourceId;\n    readonly deliveryId: WebhookDeliveryId;\n    readonly event: WebhookEventOf<K>;\n    readonly receivedAt: number;\n}',
+  },
+  {
+    name: 'WebAuthenticationSession',
+    declaration: 'export interface WebAuthenticationSession {\n    readonly id: object;\n    readonly principal: Principal;\n    readonly signal: AbortSignal;\n}',
   },
   {
     name: 'WebBootBatch',

@@ -1,3 +1,4 @@
+import { createAuthenticationRecovery } from './authentication-recovery.ts'
 /** Browser wire client: Remote transport and connection generations. */
 import type { Context } from '@deepseek-ai/cordis'
 import {
@@ -117,6 +118,7 @@ export interface ClientTransportHooks {
 interface ClientTransportGlobal {
   __DSH_TRANSPORT__?: ClientTransportHooks
   __DSH_CONNECTION_RECOVERY__?: unknown
+  __DSH_AUTHENTICATION__?: { readonly loginPath: string; readonly sessionPath: string }
 }
 
 /** Browser location fields used to classify loopback authority. */
@@ -126,6 +128,8 @@ export interface ConnectionLocation {
 
 /** Instance-local inputs for installing a Connection service. */
 export interface ConnectionInstallOptions {
+  /** External browser login recovery; absent retains native-token and non-browser behavior. */
+  readonly authentication?: { readonly loginPath: string; readonly sessionPath: string; readonly navigate: (path: string) => void }
   /** Forwarded-event participation; omission selects answer for a page and none otherwise. */
   readonly interactions?: ConnectionInteractions
   /** Explicit physical carrier; omit for the browser HTTP + WebSocket carrier. */
@@ -224,7 +228,11 @@ export function installConnection(ctx: Context, options: ConnectionInstallOption
   const transport = options.transport
   const recovery = options.recovery ?? {}
   const interactions = options.interactions ?? (pageLocation === undefined ? 'none' : 'answer')
-  const rpc = transport?.rpc ?? createWebConnectionRpc(transport?.fetch, transport?.openStream)
+  const authentication = options.authentication === undefined ? undefined : createAuthenticationRecovery({
+    ...options.authentication,
+    fetch: transport?.fetch ?? ((input, init) => globalThis.fetch(input, init)),
+  })
+  const rpc = transport?.rpc ?? createWebConnectionRpc(authentication?.fetch ?? transport?.fetch, transport?.openStream)
   let generationSource: ConnectionGenerationSource | undefined
   let owner: ConnectionOwner | undefined
   let generationId = 0
@@ -311,6 +319,7 @@ export function installConnection(ctx: Context, options: ConnectionInstallOption
           sinks.onConnected?.(host)
         },
         onStateChange: (state) => {
+          if (state !== 'connected' && authentication !== undefined) void authentication.probe()
           if (state !== 'connected') {
             publishGeneration(undefined)
           }
@@ -341,6 +350,12 @@ export function apply(ctx: Context): void {
   installConnection(ctx, {
     ...(transport === undefined ? {} : { transport }),
     recovery: resolveConnectionConfig(globals.__DSH_CONNECTION_RECOVERY__),
+    ...(globals.__DSH_AUTHENTICATION__ === undefined || typeof location === 'undefined' ? {} : {
+      authentication: {
+        ...globals.__DSH_AUTHENTICATION__,
+        navigate: (path: string) => { location.assign(new URL(path, document.baseURI).href) },
+      },
+    }),
     ...(pageLocation === undefined ? {} : { location: pageLocation }),
   })
 }

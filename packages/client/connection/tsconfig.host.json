@@ -7,6 +7,7 @@
   },
   "files": [
     "src/api-path.ts",
+    "src/client/authentication-recovery.ts",
     "src/api-request-trust.ts",
     "src/browser-auth.ts",
     "src/client/random-uuid.ts",

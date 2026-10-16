@@ -16,6 +16,8 @@ import { API_PATH } from './api-path.ts'
 import type { BrowserAuth } from './browser-auth.ts'
 import { Peer } from './peer.ts'
 import type {
+  WebAuthenticationProvider,
+  WebAuthenticationSession,
   PeerAdmission,
   ConnectionAdmission,
   ConnectionIndexRequest,
@@ -71,6 +73,8 @@ export class HostConnectionService extends Service implements HostConnectionHand
   /** The Peer every authenticated browser connection shares. */
   readonly browserPeer: PeerScope
   private readonly peers = new Map<PeerId, PeerRecord>()
+  private readonly authenticatedPeers = new Map<object, { peer: Peer; release: () => void }>()
+  private readonly sessionPeers = new WeakSet<PeerScope>()
   private readonly owner: Context
   private disposed = false
   private readonly interceptors = new Map<string, ConnectionRpcInterceptor>()
@@ -87,14 +91,21 @@ export class HostConnectionService extends Service implements HostConnectionHand
   constructor(
     ctx: Context,
     private readonly trustedHosts: readonly string[],
-    private readonly browserAuth: BrowserAuth,
+    private readonly browserAuth: BrowserAuth | undefined,
+    private readonly externalAuthentication?: WebAuthenticationProvider,
   ) {
     super(ctx, 'connection')
+    if (browserAuth === undefined && externalAuthentication === undefined) {
+      throw new Error('client-connection: no authentication provider configured')
+    }
     this.owner = ctx
     this.browserPeer = new Peer(ctx, { principal: { kind: 'owner' } })
     ctx.effect(() => async () => {
       this.disposed = true
-      const peers = [this.browserPeer, ...Array.from(this.peers.values(), record => record.peer)]
+      const external = [...this.authenticatedPeers.values()]
+      this.authenticatedPeers.clear()
+      for (const record of external) record.release()
+      const peers = [this.browserPeer, ...Array.from(this.peers.values(), record => record.peer), ...external.map(record => record.peer)]
       this.peers.clear()
       await Promise.all(peers.map(peer => peer.dispose()))
     }, 'client-connection: Peer scopes')
@@ -129,11 +140,36 @@ export class HostConnectionService extends Service implements HostConnectionHand
   admit(request: ConnectionTrustRequest): PeerAdmission {
     if (!this.isTrusted(request)) return { rejection: 403 }
     if (this.disposed) return { rejection: 401 }
+    if (this.externalAuthentication !== undefined) {
+      const session = this.externalAuthentication.authenticate(request)
+      return session === undefined || session.signal.aborted ? { rejection: 401 } : { peer: this.sessionPeer(session) }
+    }
+    if (this.browserAuth === undefined) return { rejection: 401 }
     const secure = this.owner.get('webServer')?.protocol === 'https:'
     if (this.browserAuth.isAuthenticated(request, secure)) return { peer: this.browserPeer }
     const id = this.browserAuth.authenticateApi(request, secure)
     const record = id === undefined ? undefined : this.peers.get(id)
     return record === undefined ? { rejection: 401 } : { peer: record.peer }
+  }
+
+  /** Identify session-owned resources without changing native Peer lifetimes. */
+  isSessionPeer(peer: PeerScope): boolean {
+    return this.sessionPeers.has(peer)
+  }
+
+  private sessionPeer(session: WebAuthenticationSession): Peer {
+    const existing = this.authenticatedPeers.get(session.id)
+    if (existing !== undefined) return existing.peer
+    const provider = this.externalAuthentication
+    if (provider === undefined) throw new Error('client-connection: external provider disappeared')
+    const peer = new Peer(this.owner, { principal: session.principal })
+    this.sessionPeers.add(peer)
+    const release = provider.onRevoke(session, async () => {
+      this.authenticatedPeers.delete(session.id)
+      await peer.dispose()
+    })
+    this.authenticatedPeers.set(session.id, { peer, release })
+    return peer
   }
 
   /** Create one in-process Peer owned by the Context that read this service. */
@@ -183,6 +219,11 @@ export class HostConnectionService extends Service implements HostConnectionHand
       response.end(this.disposed ? 'unauthorized' : 'forbidden')
       return
     }
+    if (this.externalAuthentication !== undefined || this.browserAuth === undefined) {
+      response.writeHead(401)
+      response.end('unauthorized')
+      return
+    }
     this.browserAuth.authorizeConnect(request, response,
       this.owner.get('webServer')?.protocol === 'https:', interactions => this.publishPeer(interactions))
   }
@@ -191,11 +232,15 @@ export class HostConnectionService extends Service implements HostConnectionHand
    * Authenticate an index request; native TLS listeners mint Secure cookies.
    */
   authorizeIndex(request: ConnectionIndexRequest, response: ConnectionIndexResponse): boolean {
+    if (this.externalAuthentication !== undefined) return this.externalAuthentication.authorizeIndex(request, response)
+    if (this.browserAuth === undefined) { response.writeHead(401); response.end(); return false }
     return this.browserAuth.authorizeIndex(request, response, this.ctx.get('webServer')?.protocol === 'https:')
   }
 
   /** Add this process's launch token to the clean application URL. */
   authenticatedUrl(baseUrl: string): string {
+    if (this.externalAuthentication !== undefined) return this.externalAuthentication.authenticatedUrl(baseUrl)
+    if (this.browserAuth === undefined) throw new Error('client-connection: no authentication provider configured')
     return this.browserAuth.authenticatedUrl(baseUrl)
   }
 
@@ -267,7 +312,8 @@ export class HostConnectionService extends Service implements HostConnectionHand
           res.end(admission.rejection === 401 ? 'unauthorized' : 'forbidden')
           return
         }
-        await bridge(req, res, fetchHandler, admission.peer)
+        const lifetimeSignal = this.isSessionPeer(admission.peer) ? admission.peer.signal : undefined
+        await bridge(req, res, fetchHandler, admission.peer, undefined, lifetimeSignal)
       },
     }
     return owner.effect(

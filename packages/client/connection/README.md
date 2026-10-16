@@ -65,6 +65,13 @@ Set the Host Connection row's `config.recovery` to override retry caps, the grow
 
 
 <a id="model-experience"></a>
+## External browser authentication
+
+Set `authentication: external` only in a profile that explicitly injects `webAuthentication` and mounts an authentication provider such as [`credentials-oidc`](../../credentials/oidc/README.md). Missing providers fail startup. Native launch tokens and `/connect` cannot authenticate this mode. The default remains native authentication.
+
+The provider owns page admission, HTTP/API and WebSocket identity. Each external session owns a separate Peer. Revocation closes its transports and aborts in-flight HTTP requests, waiting up to one second for cooperative HTTP cleanup. Revocation destroys HTTP transports immediately; after that grace period, an uncooperative handler is detached and late response bytes are discarded. This does not forcibly stop independent business execution. Committed terminals remain Agent-owned across revocation; authentication owns only transport access. Already submitted model turns, queued prompts and independently owned background jobs have separate lifetimes and are not cancelled by browser logout.
+
+External pages receive only login/session endpoint paths. HTTP 401 and expired connection probes navigate once to the same-origin login endpoint. Logout is a same-origin `POST /auth/oidc/logout`; there is no dedicated application-logout button yet. DeepSeek model-account sign-out is a different operation.
 ## Model Experience
 
 None, as the wire consumer layer moves already-composed messages between browser and host; nothing here reaches a model request.

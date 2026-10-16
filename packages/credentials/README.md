@@ -30,6 +30,8 @@ Three packages provide the credential feature: one stores, looks up, and removes
 | [`credentials-local/`](credentials-local/README.md) | The default on-machine store: a private YAML file that outranks environment fallbacks | registers `ctx.credentials` |
 | [`authorization/`](authorization/README.md) | Plugin-owned flows that obtain a credential by asking a human | `ctx.authorization` |
 
+The opt-in [`oidc/`](oidc/README.md) package supplies `ctx.webAuthentication` for browser login with an explicitly configured identity provider. It does not provide model credentials.
+
 -----
 
 <a id="related-documentation"></a>

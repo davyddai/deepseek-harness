@@ -96,6 +96,8 @@ export type RpcMessage = ClientRequest | ServerResponse
 
 /** HTTP request facts consumed by browser trust and authentication. */
 export interface ConnectionTrustRequest {
+  /** Relative node:http URL or absolute Fetch URL; absent for legacy header-only callers. */
+  readonly url?: string | undefined
   /** Request headers supplied by either the Fetch or node:http representation. */
   readonly headers: Headers | Readonly<Record<string, string | readonly string[] | undefined>>
 }
@@ -111,8 +113,57 @@ export interface ConnectionIndexRequest extends ConnectionTrustRequest {
 
 /** Root/index response operations owned by the browser-token exchange. */
 export interface ConnectionIndexResponse {
-  writeHead(status: number, headers?: Readonly<Record<string, string>>): unknown
+  writeHead(status: number, headers?: Readonly<Record<string, string | string[]>>): unknown
   end(body?: string): unknown
+}
+
+/** One validated external authentication session; its provider owns the lifetime. */
+export interface WebAuthenticationSession {
+  /** Instance-owned identity used as a map key, never a browser credential. */
+  readonly id: object
+  /** Principal explicitly authorized by the configured provider. */
+  readonly principal: Principal
+  /** Aborted before the provider begins revocation cleanup. */
+  readonly signal: AbortSignal
+}
+
+/** External Web authentication selected explicitly instead of the native token mode. */
+export interface WebAuthenticationProvider {
+  /** Same-origin login route for browser recovery. */
+  readonly loginPath: string
+  /** Same-origin POST logout route. */
+  readonly logoutPath: string
+  /** Return a live validated session.
+   * @param request - Incoming browser request.
+   * @returns Validated session, or undefined when unauthorized.
+   */
+  authenticate(request: ConnectionTrustRequest): WebAuthenticationSession | undefined
+  /** Serve the index only for a validated session, otherwise own the login/rejection response.
+   * @param request - Incoming page request.
+   * @param response - Response owned on rejection.
+   * @returns Whether the caller may serve the page.
+   */
+  authorizeIndex(request: ConnectionIndexRequest, response: ConnectionIndexResponse): boolean
+  /** Return the clean login URL without a native token.
+   * @param baseUrl - Public deployment URL.
+   * @returns Clean login URL.
+   */
+  authenticatedUrl(baseUrl: string): string
+  /** Register cleanup that revocation awaits.
+   * @param session - Live provider-owned session.
+   * @param cleanup - Asynchronous transport teardown.
+   * @returns Function that unregisters the cleanup.
+   */
+  onRevoke(session: WebAuthenticationSession, cleanup: () => Promise<void>): () => void
+  /** Revoke all sessions and await cleanup when the owning plugin unloads. */
+  dispose(): Promise<void>
+}
+
+declare module '@deepseek-ai/cordis' {
+  interface Context {
+    /** Configured external authentication provider; absent in native-token profiles. */
+    webAuthentication: WebAuthenticationProvider
+  }
 }
 
 /** Outcome of admitting one request: the Peer it speaks for, or the status refusing it. */
@@ -210,6 +261,11 @@ export interface HostConnectionHandle {
   readonly fetch: HostConnectionFetch
   /** The owner Peer every authenticated browser connection shares. */
   readonly browserPeer: PeerScope
+  /** Identify externally authenticated session Peers; absence means host-lifetime legacy Peers.
+   * @param peer - Peer admitted by this connection owner.
+   * @returns Whether external session revocation owns this Peer.
+   */
+  isSessionPeer?(peer: PeerScope): boolean
 
   /**
    * Whether this deployment accepts authorities beyond loopback: true only

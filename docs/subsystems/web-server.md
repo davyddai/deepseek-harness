@@ -100,6 +100,12 @@ Generated from source by `scripts/gen-cordis-catalog.ts` (verified fresh by `pnp
 Host `ctx.connection` members consumed by transport-independent adapters.
 
 ```ts cordis-catalog
+/** Identify externally authenticated session Peers; absence means host-lifetime legacy Peers.
+ * @param peer - Peer admitted by this connection owner.
+ * @returns Whether external session revocation owns this Peer.
+ */
+isSessionPeer?(peer: PeerScope): boolean
+
 /**
  * Compose exact Fetch routes and the shared-channel RPC interceptor.
  * @param channel - shared channel mounted by Connection.
@@ -175,6 +181,45 @@ getAdvertisedUrl(): string
 ```
 
 Source: [`packages/bundle/web-app/src/index.ts`](../../packages/bundle/web-app/src/index.ts)
+
+<a id="ctxwebauthentication--webauthenticationprovider"></a>
+
+### `ctx.webAuthentication` — `WebAuthenticationProvider`
+
+External Web authentication selected explicitly instead of the native token mode.
+
+```ts cordis-catalog
+/** Return a live validated session.
+ * @param request - Incoming browser request.
+ * @returns Validated session, or undefined when unauthorized.
+ */
+authenticate(request: ConnectionTrustRequest): WebAuthenticationSession | undefined
+
+/** Serve the index only for a validated session, otherwise own the login/rejection response.
+ * @param request - Incoming page request.
+ * @param response - Response owned on rejection.
+ * @returns Whether the caller may serve the page.
+ */
+authorizeIndex(request: ConnectionIndexRequest, response: ConnectionIndexResponse): boolean
+
+/** Return the clean login URL without a native token.
+ * @param baseUrl - Public deployment URL.
+ * @returns Clean login URL.
+ */
+authenticatedUrl(baseUrl: string): string
+
+/** Register cleanup that revocation awaits.
+ * @param session - Live provider-owned session.
+ * @param cleanup - Asynchronous transport teardown.
+ * @returns Function that unregisters the cleanup.
+ */
+onRevoke(session: WebAuthenticationSession, cleanup: () => Promise<void>): () => void
+
+/** Revoke all sessions and await cleanup when the owning plugin unloads. */
+dispose(): Promise<void>
+```
+
+Source: [`packages/client/connection/src/rpc.ts`](../../packages/client/connection/src/rpc.ts)
 
 <a id="ctxwebserver--webserver"></a>
 

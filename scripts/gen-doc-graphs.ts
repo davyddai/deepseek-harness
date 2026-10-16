@@ -420,6 +420,15 @@ const SERVICE_ROLES: ServiceRole[] = [
     note: 'Owns the default-off settings namespace that Agent-scoped delegation tools sample when composing a new top-level Session.',
   },
   {
+    key: 'webAuthentication',
+    pkg: 'client-connection',
+    title: 'External browser authentication',
+    mode: 'seam',
+    implementations: ['credentials-oidc'],
+    consumers: ['client-connection'],
+    note: 'The configured provider validates browser sessions and owns transport revocation; accepted tasks remain Agent-owned.',
+  },
+  {
     key: 'credentials',
     pkg: 'credentials',
     title: 'Credential seam',
